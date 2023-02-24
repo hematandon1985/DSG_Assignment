@@ -1,0 +1,231 @@
+-- Dick's Supporting Goods Assignment by Hema
+-- Snowflake used to write teh queries.
+
+create or replace temporary table curated_dev.crm.store_transaction_header
+(
+id	number,
+transaction_date Timestamp,
+store_number number,
+customer_id	number,
+discount_total	number(20,2),
+subtotal	number(20,2),
+tax	number(20,2),
+total	number(20,2),
+payment_type varchar(4)
+);
+
+
+create or replace temporary table curated_dev.crm.online_order_header
+(
+order_id number,
+order_date Timestamp,
+ship_date Timestamp,
+shipping_adress_1 varchar(255),
+shipping_adress_2 varchar(255),
+shipping_adress_3 varchar(255),
+shipping_state varchar(2),
+shipping_zip varchar(5),
+customer_id	number,
+discount_total number(20,2),
+subtotal number(20,2),
+tax	number(20,2),
+total number(20,2),
+payment_type number(4)
+);
+
+
+create or replace temporary table curated_dev.crm.store_master
+(
+store_no	int,
+store_name	varchar(255),
+adress_1	varchar(255),
+adress_2	varchar(255),
+adress_3	varchar(255),
+state	varchar(2),
+zip	varchar(5),
+phone	varchar(15),
+store_mgr	varchar(255),
+division	varchar(25)
+);
+
+
+create or replace temporary table curated_dev.crm.store_transaction_detail
+(
+header_id	int,
+sku	varchar(50),
+qty	int,
+original_price	decimal(20,2),
+discount_price	decimal(20,2),
+taxable_flag	char(1)
+);
+
+create or replace temporary table curated_dev.crm.online_order_detail
+(
+order_id int,
+sku	varchar(50),
+qty	int,
+original_price	decimal(20,2),
+discount_price	decimal(20,2),
+taxable_flag	char(1)
+);
+
+
+create or replace temporary table curated_dev.crm.product_master
+(
+sku	varchar(50),
+description	varchar(255),
+vendor_name	varchar(255),
+department	varchar(255),
+subdepartment	varchar(255),
+catgory	varchar(255)
+);
+
+
+
+create or replace temporary table curated_dev.crm.Omni_transaction 
+(
+id number  primary key not null,
+transaction_id number,  
+transaction_order_date Timestamp,
+store_number number,
+customer_id	number,
+discount_total	number(20,2),
+subtotal	number(20,2),
+tax	number(20,2),
+total	number(20,2),
+payment_type varchar(4),
+order_id number,  
+ship_date	Timestamp,
+shipping_adress_1	varchar(255),
+shipping_adress_2	varchar(255),
+shipping_adress_3	varchar(255),
+shipping_state	varchar(2),
+shipping_zip	varchar(5) 
+);
+
+--Design a “Omni Transaction” table(s) that can merge in-store and online transaction
+
+insert into curated_dev.crm.Omni_transaction 
+SELECT 
+    ROW_NUMBER() OVER(ORDER BY id) as id,
+    id as transaction_id,
+    transaction_date as transaction_order_date,
+    store_number,
+    customer_id,
+    discount_total,
+    subtotal,
+    tax,
+    total,
+    payment_type,
+    NULL as order_id,
+    NULL as ship_date,
+    NULL as shipping_adress_1,
+    NULL as shipping_adress_2,
+    NULL as shipping_adress_3,
+    NULL as shipping_state,
+    NULL as shipping_zip
+FROM 
+    curated_dev.crm.store_transaction_header
+    
+union 
+
+SELECT 
+    ROW_NUMBER() OVER(ORDER BY order_id) + (SELECT COUNT(*) FROM curated_dev.crm.store_transaction_header)  as id,
+    NULL as  transaction_id,
+    order_date as transaction_order_date,
+    NULL as store_number,
+    customer_id,
+    discount_total,
+    subtotal,
+    tax,
+    total,
+    payment_type,
+    order_id,
+    ship_date,
+    shipping_adress_1,
+    shipping_adress_2,
+    shipping_adress_3,
+    shipping_state,
+    shipping_zip
+FROM 
+    curated_dev.crm.online_order_header;
+    
+
+-- All Sale Totals by Customer over a range of dates (Day, Week, Month, Quarter and Year)
+
+
+select customer_id,DATE_TRUNC('day', transaction_order_date) AS day,sum(total)
+from curated_dev.crm.Omni_transaction 
+where transaction_order_date between '01-01-2023' and current_date
+group by customer_id,day;
+
+
+-- All Sale Totals by Store and Division over a range of dates (Day, Week, Month, Quarter and Year)
+
+select store_number,division,DATE_TRUNC('day', transaction_order_date) AS day,sum(total) 
+from curated_dev.crm.Omni_transaction ot
+left join curated_dev.crm.store_master sm
+on ot.store_number=sm.store_no
+where transaction_order_date between '01-01-2023' and current_date
+group by store_number,division,day;
+
+
+-- All Sale Totals by Products Categories over a range of dates (Day, Week, Month, Quarter and Year)
+
+select pm.catgory,DATE_TRUNC('day', st.transaction_order_date) AS day, sum(st.total + ooh.total) AS total_sales
+from curated_dev.crm.product_master pm
+join curated_dev.crm.store_transaction_detail std on pm.sku = std.sku
+join curated_dev.crm.Omni_transaction st on std.header_id = st.transaction_id
+join curated_dev.crm.online_order_detail ood on pm.sku = ood.sku
+join curated_dev.crm.Omni_transaction ooh on ood.order_id = ooh.order_id
+where st.transaction_order_date between '01-01-2023' and current_date
+group by pm.catgory,day
+order by pm.catgory,day;
+
+
+--Customer sales by channel (in-store or online) a range of dates (Day, Week, Month, Quarter and Year)
+
+select case when transaction_id is not null then 'in-store' 
+            when order_id is not null then 'online'
+            else '' end channel,
+            DATE_TRUNC('day', transaction_order_date) AS day,
+sum(total)
+from curated_dev.crm.Omni_transaction
+where transaction_order_date between '01-01-2023' and current_date 
+group by channel,day
+order by channel,day;
+
+
+/* Stores are periodical realigned to divisions the Omni Transaction table must support both the historical and current views of location data
+ If my understand is correct, its an example of slowly changing dimesion where if Store A belongs to division X at a point,later it can belongs to division Y and so on.
+ There should be some way to maintain the history of mapping between Store and division. Here is one of the multiple solutions I propose. Lets say the store master
+ table has division_id (divison name could still remain here or can be moved to other dimesnion table to redue redunancy or we can have a separate store and dvision mapping table.), start date and end date.
+ here end date will be empty for the latest mapping between store and divison. Later we can join omni transaction table with store master table to get store details, along with
+ division at that time using transaction date between store dvision mapping start date and end date.*/
+ 
+ 
+ 
+create or replace temporary table curated_dev.crm.store_master_new
+(
+store_no	int,
+store_name	varchar(255),
+adress_1	varchar(255),
+adress_2	varchar(255),
+adress_3	varchar(255),
+state	varchar(2),
+zip	varchar(5),
+phone	varchar(15),
+store_mgr	varchar(255),
+division	varchar(25),
+division_id int,
+start_date timestamp,
+end_date timestamp
+);
+
+
+select o.*,
+       s.division_id,s.division
+from curated_dev.crm.omni_transaction o
+join curated_dev.crm.store_master_new s on o.store_number = s.store_no
+where o.transaction_order_date between s.start_date and s.end_date;
+
